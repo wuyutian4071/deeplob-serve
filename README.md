@@ -25,10 +25,11 @@
 
 ## Status
 
-Built milestone by milestone. Current: **M5 — Transformer baseline + ablation sweeps**: a
-lightweight Transformer encoder plugged into the same generic training loop the CNN-LSTM
-uses, a proper Hydra config group so the model is swappable from the command line, and a
-6-way ablation sweep (model × label horizon) run end to end via Hydra's `--multirun`.
+Built milestone by milestone. Current: **M6 — comparative evaluation + calibration**: every
+model this project has built (both M3 baselines, the M4 CNN-LSTM, the M5 Transformer) run
+through the shared evaluation harness on one identical synthetic dataset/split, plus
+calibration analysis (reliability diagram + Brier score). Surfaced a genuinely important
+finding along the way — see below.
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
@@ -37,7 +38,7 @@ uses, a proper Hydra config group so the model is swappable from the command lin
 | M3 | Baselines (logistic regression, gradient boosting) + temporal-split evaluation harness | ✅ |
 | M4 | DeepLOB-style CNN-LSTM + training infra (Lightning, Hydra, MLflow) | ✅ |
 | M5 | Transformer baseline + ablation sweeps | ✅ |
-| M6 | Comparative evaluation across all models + calibration + published-results comparison | ⬜ |
+| M6 | Comparative evaluation across all models + calibration + published-results comparison | ✅ |
 | M7 | ONNX export + quantization + differential parity check | ⬜ |
 | M8 | C++ inference engine + latency/throughput benchmarks | ⬜ |
 | M9 | Trading-signal simulation + polished README/DESIGN.md/BENCHMARKS.md | ⬜ |
@@ -191,6 +192,88 @@ under-trained Transformer settling into a degenerate 2-class solution rather tha
 architectural problem, but that's an inference, not something independently confirmed here;
 a longer per-combination training budget would be the natural next check if this mattered for
 a real deployment decision.
+
+## Comparative evaluation + calibration (M6)
+
+`evaluation/compare.py` fits/trains and evaluates all four models this project has built —
+`LogisticRegressionBaseline`, `GradientBoostingBaseline` (M3), `DeepLOBCNNLSTM` (M4),
+`LOBTransformer` (M5) — against the exact same synthetic dataset and temporal split, so the
+comparison is apples-to-apples. It also adds calibration analysis (`evaluation/metrics.py`'s
+`brier_score()`/`calibrate()`) and probability-collection support
+(`baselines.py`'s `predict_proba()`, `lightning_module.py`'s `collect_probabilities()`) that
+M3-M5 didn't need, since accuracy/F1 alone don't say anything about whether a model's
+confidence is trustworthy. Run via `uv run python -m deeplob.evaluation.compare`:
+
+| Model | Accuracy | Macro F1 | Brier | ECE |
+|-------|----------|----------|-------|-----|
+| Logistic regression | 0.574 | 0.524 | 0.539 | 0.045 |
+| Gradient boosting | 0.381 | 0.242 | 0.674 | 0.078 |
+| CNN-LSTM | 0.337 | 0.333 | 1.047 | 0.465 |
+| Transformer | 0.328 | 0.276 | 0.774 | 0.226 |
+
+**This does not continue the "everything lands at chance" story from M2-M5** — logistic
+regression scored 57.4% accuracy, well above the ~33% chance rate for three classes, and
+consistently so: 61.2% on its own training data, 56.2% on validation, 57.4% on test. That
+consistency across three disjoint splits ruled out the first suspicion (a lucky, overfit
+result on one particular held-out slice) and made this worth actually tracing to a cause
+rather than writing off.
+
+The cause: this project's labeling scheme (`data/labeling.py`) compares a **backward**-
+looking mean against a **forward**-looking mean of the mid-price, thresholded by `alpha`.
+The synthetic mid-price is a driftless random walk, so its true expected future value equals
+its *current* value — but `backward_mean` is a trailing average, which necessarily *lags*
+the current price. The result: `E[forward_mean - backward_mean | history] = current_price -
+backward_mean`, which is exactly the window's own recent momentum, and is visible in the
+input window at prediction time. This was verified directly, not just reasoned about: a
+trivial momentum feature (`current_price - backward_mean`, the same value the label itself is
+computed relative to) correlates **0.587** with the label across the full synthetic dataset,
+with mean momentum cleanly separating the three classes (DOWN: -0.059, STATIONARY: -0.0008,
+UP: +0.058). This is a real, structural property of *any* backward/forward-mean smoothed
+label applied to a non-stationary series — not a bug in this project's code, and not evidence
+that the random walk's actual future price movements are predictable (they mathematically
+aren't; a driftless random walk's future increments are independent of its past). Logistic
+regression's linear form lets it fit this momentum artifact directly and cheaply; the tree
+ensemble and both neural models, with more capacity and less inductive bias toward a single
+linear feature, apparently don't converge onto the same shortcut as readily within this
+comparison's training budget — plausible, but stated as an inference rather than something
+independently confirmed for each of the other three models here. The real, practical
+implication: **any labeling-scheme validation on FI-2010 data should check for this exact
+momentum artifact before trusting a model's above-chance score as genuine predictive skill**
+— this is exactly the kind of scheme used in the literature, so real data would need the same
+scrutiny, not an assumption that a smoothed label is automatically "safe."
+
+Two more findings surfaced purely from actually running this comparison, not from writing the
+code and assuming it would work:
+- `LogisticRegressionBaseline`'s `ConvergenceWarning` (already found and fixed once, in M3)
+  resurfaced at this comparison's original `window_size=100` — 4000 flattened features, 5x
+  M3's own test fixtures (800) — despite M3's `StandardScaler` fix already being in place.
+  Fixed by raising `max_iter` to 5000 for this comparison's instantiation specifically.
+- `GradientBoostingClassifier` (an exact, non-histogram split-search, unlike
+  `HistGradientBoostingClassifier`) scales badly with feature count: fitting it at
+  `window_size=100` (4000 features) took long enough — over 7 minutes at the default 100
+  estimators, still running past 10 minutes even at a reduced 30 — that both attempts were
+  killed rather than waited out. Resolved by reducing `compare.py`'s own `window_size` to 30
+  (1200 features), scoped only to this comparison script — not to M3's baseline class, its
+  own tests, or `config.yaml`'s training defaults — since this is purely a practicality
+  concern for a script meant to be re-run easily, not a change to what's being tested (no
+  window size gives a driftless random walk's true future increments real predictability).
+
+**Model selection for M7 (ONNX export) and M8 (C++ inference engine): the CNN-LSTM.** This is
+explicitly *not* because it scored highest here — it didn't, and per the finding above, none
+of these scores should be read as genuine predictive skill in the first place. The reasons are
+architectural and operational: M7-M8 are specifically about exporting and serving a neural
+network, which rules out the two baselines regardless of their (label-artifact-inflated or
+not) scores; and between the two neural models, M5's ablation sweep found the Transformer
+collapsed to never predicting STATIONARY at 2 of 3 horizons tested under a short training
+budget, while the CNN-LSTM showed no such collapse at any horizon — a concrete, observed
+robustness difference between the two candidates, not a score-based tiebreak.
+
+**Comparison against published FI-2010 results is deferred**, exactly as `data/fi2010.py`'s
+own docstring already states for the loader itself: this project has run only synthetic data
+through M1-M6, and stating specific published accuracy/F1 numbers from memory here — without
+having actually run this pipeline against the real dataset — risks citing something
+misremembered. That comparison becomes meaningful once real FI-2010 data is actually loaded
+and run through this same evaluation harness, a documented manual step for a later milestone.
 
 ## License
 

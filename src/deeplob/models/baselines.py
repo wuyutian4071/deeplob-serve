@@ -47,6 +47,15 @@ class LogisticRegressionBaseline:
         result: np.ndarray = self._model.predict(flatten_windows(X))
         return result
 
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        """`[N, 3]` class probabilities, columns ordered `[DOWN, STATIONARY, UP]` -- holds as
+        long as training data contains all three classes (sklearn orders `predict_proba`'s
+        columns by `classes_`, the sorted unique labels seen during `fit`, which for
+        `Label`'s `IntEnum` values 0/1/2 is exactly `[DOWN, STATIONARY, UP]`).
+        """
+        result: np.ndarray = self._model.predict_proba(flatten_windows(X))
+        return result
+
 
 class GradientBoostingBaseline:
     """Gradient-boosted trees over flattened LOB windows."""
@@ -62,4 +71,12 @@ class GradientBoostingBaseline:
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         result: np.ndarray = self._model.predict(flatten_windows(X))
+        return result
+
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+        """`[N, 3]` class probabilities, columns ordered `[DOWN, STATIONARY, UP]` -- see
+        `LogisticRegressionBaseline.predict_proba`'s docstring for why this column order
+        holds.
+        """
+        result: np.ndarray = self._model.predict_proba(flatten_windows(X))
         return result

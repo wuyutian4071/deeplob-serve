@@ -72,3 +72,24 @@ def collect_predictions(
             all_true.append(y.cpu().numpy())
             all_pred.append(preds.cpu().numpy())
     return np.concatenate(all_true), np.concatenate(all_pred)
+
+
+def collect_probabilities(
+    module: LOBClassifier, dataloader: DataLoader[tuple[torch.Tensor, torch.Tensor]]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Runs `module` in eval mode over every batch in `dataloader`, returning `(y_true,
+    probs)` where `probs` is `[N, 3]` softmax class probabilities -- for calibration analysis
+    (`deeplob.evaluation.metrics.calibrate`/`brier_score`), which needs probabilities, not
+    just `collect_predictions()`'s hard argmax labels.
+    """
+    module.eval()
+    all_true: list[np.ndarray] = []
+    all_probs: list[np.ndarray] = []
+    with torch.no_grad():
+        for x, y in dataloader:
+            x = x.to(module.device)
+            logits = module(x)
+            probs = torch.softmax(logits, dim=-1)
+            all_true.append(y.cpu().numpy())
+            all_probs.append(probs.cpu().numpy())
+    return np.concatenate(all_true), np.concatenate(all_probs)

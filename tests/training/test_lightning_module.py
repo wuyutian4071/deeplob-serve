@@ -1,10 +1,15 @@
 import lightning as L  # noqa: N812 -- Lightning's own docs and ecosystem-wide convention
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
 from deeplob.training.dataset import LOBWindowDataset
-from deeplob.training.lightning_module import LOBClassifier, collect_predictions
+from deeplob.training.lightning_module import (
+    LOBClassifier,
+    collect_predictions,
+    collect_probabilities,
+)
 
 _WINDOW_SIZE = 5
 _NUM_FEATURES = 4
@@ -73,3 +78,28 @@ def test_collect_predictions_returns_valid_labels_for_every_sample() -> None:
     assert y_true.shape == (10,)
     assert y_pred.shape == (10,)
     assert set(y_pred.tolist()) <= {0, 1, 2}
+
+
+def test_collect_probabilities_returns_a_valid_distribution_per_sample() -> None:
+    module = LOBClassifier(_TinyModel())
+    loader = _make_dataloader(10)
+
+    y_true, probs = collect_probabilities(module, loader)
+
+    assert y_true.shape == (10,)
+    assert probs.shape == (10, 3)
+    np.testing.assert_allclose(probs.sum(axis=1), 1.0, atol=1e-6)
+    assert (probs >= 0.0).all()
+
+
+def test_collect_probabilities_argmax_matches_collect_predictions() -> None:
+    # Same underlying model, same forward pass -- the two collection functions must agree on
+    # which class each sample is predicted as, not just each independently return something
+    # shaped correctly.
+    module = LOBClassifier(_TinyModel())
+    loader = _make_dataloader(10)
+
+    _, y_pred = collect_predictions(module, loader)
+    _, probs = collect_probabilities(module, loader)
+
+    np.testing.assert_array_equal(y_pred, probs.argmax(axis=1))

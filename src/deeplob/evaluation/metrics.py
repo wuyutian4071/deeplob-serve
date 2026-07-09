@@ -34,6 +34,88 @@ class EvaluationReport:
         return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class CalibrationBin:
+    """One bin of a reliability diagram: predictions bucketed by the model's own top
+    predicted probability ("confidence"), each bin's mean confidence checked against how
+    often those predictions were actually correct.
+    """
+
+    bin_lower: float
+    bin_upper: float
+    mean_confidence: float
+    observed_accuracy: float
+    count: int
+
+
+@dataclass(frozen=True)
+class CalibrationReport:
+    brier_score: float
+    bins: list[CalibrationBin]
+    # Weighted average |confidence - accuracy| across non-empty bins -- 0 is perfectly
+    # calibrated, higher means the model's confidence systematically over- or
+    # under-states how often it's actually right.
+    expected_calibration_error: float
+
+
+def brier_score(y_true: np.ndarray, probs: np.ndarray) -> float:
+    """Multi-class Brier score: mean over samples of the sum-of-squared-differences between
+    the one-hot true label and the predicted probability vector. 0 is a perfect prediction;
+    for a uniform (uninformative) 3-class prediction, this works out to 2/3 ~ 0.667 --
+    confirmed by hand and covered by a test, not just asserted here.
+    """
+    if y_true.shape[0] != probs.shape[0]:
+        raise ValueError("y_true and probs must have the same length")
+    if y_true.shape[0] == 0:
+        raise ValueError("cannot score an empty set of predictions")
+
+    n, num_classes = probs.shape
+    one_hot = np.zeros((n, num_classes))
+    one_hot[np.arange(n), y_true] = 1.0
+    return float(np.mean(np.sum((probs - one_hot) ** 2, axis=1)))
+
+
+def calibrate(y_true: np.ndarray, probs: np.ndarray, num_bins: int = 10) -> CalibrationReport:
+    """Reliability diagram + Brier score from `probs` ([N, 3] predicted class
+    probabilities). Bins by top-label confidence (`probs.max(axis=1)`) into `num_bins`
+    equal-width bins over [0, 1] -- empty bins are omitted from `.bins`, not reported as
+    zero/NaN, since an empty bin has no meaningful confidence or accuracy to show.
+    """
+    if y_true.shape[0] != probs.shape[0]:
+        raise ValueError("y_true and probs must have the same length")
+    if y_true.shape[0] == 0:
+        raise ValueError("cannot calibrate an empty set of predictions")
+
+    confidence = probs.max(axis=1)
+    predicted_class = probs.argmax(axis=1)
+    correct = predicted_class == y_true
+
+    edges = np.linspace(0.0, 1.0, num_bins + 1)
+    bins = []
+    ece = 0.0
+    n = y_true.shape[0]
+    for i in range(num_bins):
+        lower, upper = edges[i], edges[i + 1]
+        # The last bin's upper edge is inclusive (a confidence of exactly 1.0 must land
+        # somewhere), every other bin's upper edge is exclusive.
+        in_bin = (
+            (confidence >= lower) & (confidence <= upper)
+            if i == num_bins - 1
+            else (confidence >= lower) & (confidence < upper)
+        )
+        count = int(in_bin.sum())
+        if count == 0:
+            continue
+        mean_confidence = float(confidence[in_bin].mean())
+        observed_accuracy = float(correct[in_bin].mean())
+        bins.append(CalibrationBin(lower, upper, mean_confidence, observed_accuracy, count))
+        ece += (count / n) * abs(mean_confidence - observed_accuracy)
+
+    return CalibrationReport(
+        brier_score=brier_score(y_true, probs), bins=bins, expected_calibration_error=ece
+    )
+
+
 def evaluate(y_true: np.ndarray, y_pred: np.ndarray) -> EvaluationReport:
     """`y_true`/`y_pred` are [N] arrays of `Label` values (DOWN=0, STATIONARY=1, UP=2) -- no
     `INVALID_LABEL` entries; callers are expected to have already dropped those (which
