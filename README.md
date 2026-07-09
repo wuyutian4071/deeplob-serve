@@ -25,17 +25,16 @@
 
 ## Status
 
-Built milestone by milestone. Current: **M2 — the data pipeline**: a synthetic LOB generator
-that all tests and CI actually run against, the standard FI-2010/DeepLOB smoothed
-mid-price-movement labeling scheme, sliding-window feature/label pairing, and an FI-2010
-loader — validated against a synthetic-format fixture, since the real dataset requires a
-manual download and is never fetched in CI.
+Built milestone by milestone. Current: **M3 — baselines and the evaluation harness**: a
+chronological (never shuffled) train/val/test split, F1-per-class and confusion-matrix
+reporting shared by every model in this project, and two baselines (logistic regression,
+gradient boosting) any later model is expected to beat.
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
 | M1 | Repo skeleton, dual CI (Python + C++) | ✅ |
 | M2 | Data pipeline: FI-2010 loader + synthetic LOB generator, windowed sequences, labels | ✅ |
-| M3 | Baselines (logistic regression, gradient boosting) + temporal-split evaluation harness | ⬜ |
+| M3 | Baselines (logistic regression, gradient boosting) + temporal-split evaluation harness | ✅ |
 | M4 | DeepLOB-style CNN-LSTM + training infra (Lightning, Hydra, MLflow) | ⬜ |
 | M5 | Transformer baseline + ablation sweeps | ⬜ |
 | M6 | Comparative evaluation across all models + calibration + published-results comparison | ⬜ |
@@ -90,6 +89,28 @@ limit order book dataset Ntakaris"; see the module's own docstring) and is never
 CI — this loader is validated against a small synthetic-format fixture instead, with the
 module's docstring flagging its row-order assumptions for empirical validation against the
 real file.
+
+## Baselines and the evaluation harness (M3)
+
+`evaluation/splits.py`'s `temporal_train_val_test_split()` is the anti-leakage guarantee
+every model in this project is built on: chronological splitting only, never shuffled — a
+random split would let a validation window sit chronologically *before* a training window
+whose own horizon-labeling already peeked past it, silently leaking future information into
+training.
+
+`evaluation/metrics.py`'s `evaluate()` — accuracy, F1 per class, macro F1, and a confusion
+matrix, built once and reused by every model (baselines through the Transformer) so every
+model's numbers are directly comparable — uses scikit-learn's own metric implementations
+rather than reimplementing F1/confusion-matrix math from scratch.
+
+`models/baselines.py` provides logistic regression and gradient boosting, both operating on
+flattened windowed features (the same windowed `(X, y)` data every later model consumes,
+just adapted at this one boundary). Logistic regression is wrapped in a scaling `Pipeline` —
+not a defensive habit: the first version, unscaled, failed to converge within a reasonable
+iteration budget on raw LOB features that mix prices (~100) and volumes (~1-500) on very
+different scales, a real finding confirmed via `sklearn`'s own `ConvergenceWarning`, not
+assumed. The `Pipeline` fits the scaler on training data only and just transforms with it at
+prediction time — the standard leakage-free way to do this.
 
 ## License
 
