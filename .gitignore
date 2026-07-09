@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# uv
+.uv/
+
+# Python tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# C++ build directories (cpp/build, cpp/build-release, etc.)
+/cpp/build*/
+/cpp/.cache/
+
+# Data & generated artifacts (reproducible from documented pipeline steps).
+# NOTE: anchored to the repo root with a leading slash so these do NOT also match
+# src/deeplob/data/ (the source package) -- an unanchored `data/` matches any depth. This bit
+# statlab once; anchoring correctly from the start here.
+/data/
+/checkpoints/
+/mlruns/
+/models/*.onnx
+/models/*.pt
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

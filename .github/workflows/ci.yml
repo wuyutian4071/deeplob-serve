@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: python / lint · typecheck · test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: uv sync --all-groups
+
+      - name: Ruff lint
+        run: uv run ruff check src tests
+
+      - name: Ruff format check
+        run: uv run ruff format --check src tests
+
+      - name: Mypy (strict)
+        run: uv run mypy
+
+      - name: Pytest
+        run: uv run pytest --cov=deeplob --cov-report=term-missing
+
+  cpp:
+    name: cpp / ${{ matrix.compiler }} / ${{ matrix.build_type }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+            build_type: Debug
+            sanitizers: ON
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+            build_type: Release
+            sanitizers: OFF
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+            build_type: Debug
+            sanitizers: ON
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+            build_type: Release
+            sanitizers: OFF
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build gcc g++ clang
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          cmake -S cpp -B cpp/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DENABLE_ASAN=${{ matrix.sanitizers }} \
+            -DENABLE_UBSAN=${{ matrix.sanitizers }} \
+            -DDEEPLOB_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build cpp/build -j
+
+      - name: Test
+        run: ctest --test-dir cpp/build --output-on-failure
+
+  cpp-format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned explicitly (not the bare "clang-format" package) -- liquibook-x hit a real
+      # local-vs-CI version mismatch once (Homebrew 22.x vs. this), pinning from the start here.
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format-18
+
+      - name: Check formatting
+        run: |
+          files=$(find cpp -name '*.cpp' -o -name '*.hpp' | grep -v '/build')
+          if [ -n "$files" ]; then
+            clang-format-18 --dry-run --Werror $files
+          fi
