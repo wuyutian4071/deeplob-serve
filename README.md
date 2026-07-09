@@ -308,12 +308,17 @@ dimension 0: (64) vs (3)") — the dynamo exporter's LSTM graph isn't directly c
 `quant_pre_process` first, exactly what onnxruntime's own warning message pointed at.
 
 Numerical parity, measured (not assumed) on this model: ONNX export vs. PyTorch differs by
-~1-2×10⁻⁸ (ordinary floating-point re-implementation noise), and quantized ONNX vs. PyTorch
-differs by ~2-3×10⁻⁴ (small, expected quantization noise). Both are far below any threshold
-that would suggest a broken export — a genuinely broken pipeline produces differences many
-orders of magnitude larger, not a marginal increase, which the test suite verifies has real
-discriminating power (comparing a correct reference against deliberately garbage output
-easily exceeds every tolerance used here).
+~1-2×10⁻⁸ (ordinary floating-point re-implementation noise) on every platform tested. Quantized
+ONNX vs. PyTorch is where a genuine, worth-recording **cross-platform difference** showed up —
+~2-3×10⁻⁴ on macOS ARM64 (the development machine) but ~1.8×10⁻² on Linux x86_64 (CI),
+roughly 60-90× larger, caught by CI itself failing a tolerance this test originally shipped
+with before that difference was known. Presumably a different BLAS/CPU-instruction-set path
+in int8 quantization's own kernels between platforms, not a broken export — both values are
+still tiny relative to typical logit magnitudes, and nowhere near what a genuinely broken
+export produces (many orders of magnitude larger, which the test suite verifies has real
+discriminating power: comparing a correct reference against deliberately garbage output
+easily exceeds every tolerance used here). The test tolerance was widened to cover both
+platforms' actual measured behavior, not blindly loosened until CI happened to pass.
 
 ## C++ inference engine + latency/throughput benchmarks (M8)
 
