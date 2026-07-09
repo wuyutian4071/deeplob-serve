@@ -25,11 +25,11 @@
 
 ## Status
 
-Built milestone by milestone. Current: **M6 — comparative evaluation + calibration**: every
-model this project has built (both M3 baselines, the M4 CNN-LSTM, the M5 Transformer) run
-through the shared evaluation harness on one identical synthetic dataset/split, plus
-calibration analysis (reliability diagram + Brier score). Surfaced a genuinely important
-finding along the way — see below.
+Built milestone by milestone. Current: **M7 — ONNX export + quantization + differential
+parity check**: the CNN-LSTM (selected in M6 on architecture/robustness grounds) exported to
+ONNX, dynamically quantized, and verified against the original PyTorch model at every stage —
+the same "verify the optimized path against a trusted reference" discipline established in
+the sibling liquibook-x project.
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
@@ -39,7 +39,7 @@ finding along the way — see below.
 | M4 | DeepLOB-style CNN-LSTM + training infra (Lightning, Hydra, MLflow) | ✅ |
 | M5 | Transformer baseline + ablation sweeps | ✅ |
 | M6 | Comparative evaluation across all models + calibration + published-results comparison | ✅ |
-| M7 | ONNX export + quantization + differential parity check | ⬜ |
+| M7 | ONNX export + quantization + differential parity check | ✅ |
 | M8 | C++ inference engine + latency/throughput benchmarks | ⬜ |
 | M9 | Trading-signal simulation + polished README/DESIGN.md/BENCHMARKS.md | ⬜ |
 
@@ -274,6 +274,46 @@ through M1-M6, and stating specific published accuracy/F1 numbers from memory he
 having actually run this pipeline against the real dataset — risks citing something
 misremembered. That comparison becomes meaningful once real FI-2010 data is actually loaded
 and run through this same evaluation harness, a documented manual step for a later milestone.
+
+## ONNX export + quantization + parity check (M7)
+
+`export/onnx_export.py` exports the CNN-LSTM (`DeepLOBCNNLSTM`) to ONNX via
+`torch.onnx.export` and applies onnxruntime's dynamic quantization
+(`quantize_dynamic`, int8 weights) — the "no calibration dataset needed" mode, appropriate
+since this project has no representative real dataset to calibrate against yet.
+`export/parity.py` then runs the same input through the original PyTorch model, the exported
+ONNX model, and the quantized ONNX model, and reports how far each optimized path's logits
+diverge from the PyTorch reference — the exact "verify the optimized path against a trusted
+reference" discipline already established in the sibling **liquibook-x** project (hash map
+vs. `std::unordered_map`, `OrderBook` vs. `ReferenceOrderBook`), applied here to a model
+export instead of a C++ data structure.
+
+**The exported model has a fixed batch size (default 1), not a dynamic one — found by
+testing, not assumed.** A dynamic batch axis was the original plan and was actually
+attempted first: `torch.onnx.export`'s `dynamic_shapes` argument correctly kept the batch
+axis symbolic in a minimal isolated `nn.LSTM` test, but specialized it back down to the
+concrete traced value for this model regardless, confirmed by inspecting the exported
+graph's own declared input shape directly rather than assuming from a downstream error. This
+reads as a genuine limitation of the current dynamo-based ONNX exporter's handling of
+`nn.LSTM`'s batch-dependent internal state, not a bug in this project's usage of the API. A
+fixed batch size is also the right fit for this project's actual near-term need — M8's C++
+inference engine specifically benchmarks batch-size-1 latency — so this wasn't treated as a
+blocker; a dynamic-batch or larger-fixed-batch export for throughput-oriented serving is
+explicitly future work, not something this milestone claims to already support.
+
+Quantizing this model needed one extra step beyond calling `quantize_dynamic` directly:
+doing so failed with a `ShapeInferenceError` ("Inferred shape and existing shape differ in
+dimension 0: (64) vs (3)") — the dynamo exporter's LSTM graph isn't directly consumable by
+`quantize_dynamic`'s own shape-inference pass. Fixed by running onnxruntime's own
+`quant_pre_process` first, exactly what onnxruntime's own warning message pointed at.
+
+Numerical parity, measured (not assumed) on this model: ONNX export vs. PyTorch differs by
+~1-2×10⁻⁸ (ordinary floating-point re-implementation noise), and quantized ONNX vs. PyTorch
+differs by ~2-3×10⁻⁴ (small, expected quantization noise). Both are far below any threshold
+that would suggest a broken export — a genuinely broken pipeline produces differences many
+orders of magnitude larger, not a marginal increase, which the test suite verifies has real
+discriminating power (comparing a correct reference against deliberately garbage output
+easily exceeds every tolerance used here).
 
 ## License
 
