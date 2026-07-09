@@ -25,11 +25,11 @@
 
 ## Status
 
-Built milestone by milestone. Current: **M7 — ONNX export + quantization + differential
-parity check**: the CNN-LSTM (selected in M6 on architecture/robustness grounds) exported to
-ONNX, dynamically quantized, and verified against the original PyTorch model at every stage —
-the same "verify the optimized path against a trusted reference" discipline established in
-the sibling liquibook-x project.
+Built milestone by milestone. Current: **M8 — C++ inference engine + latency/throughput
+benchmarks**: an ONNX Runtime C++17 service loading M7's exported model, plus a
+latency-percentile harness explicitly modeled on the sibling liquibook-x project's own
+`bench/latency_histogram.hpp` — batch-size-1 P50/P99 latency, plus throughput across larger
+batch sizes.
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
@@ -40,7 +40,7 @@ the sibling liquibook-x project.
 | M5 | Transformer baseline + ablation sweeps | ✅ |
 | M6 | Comparative evaluation across all models + calibration + published-results comparison | ✅ |
 | M7 | ONNX export + quantization + differential parity check | ✅ |
-| M8 | C++ inference engine + latency/throughput benchmarks | ⬜ |
+| M8 | C++ inference engine + latency/throughput benchmarks | ✅ |
 | M9 | Trading-signal simulation + polished README/DESIGN.md/BENCHMARKS.md | ⬜ |
 
 ## Quickstart
@@ -314,6 +314,74 @@ that would suggest a broken export — a genuinely broken pipeline produces diff
 orders of magnitude larger, not a marginal increase, which the test suite verifies has real
 discriminating power (comparing a correct reference against deliberately garbage output
 easily exceeds every tolerance used here).
+
+## C++ inference engine + latency/throughput benchmarks (M8)
+
+`cpp/inference/inference_engine.{hpp,cpp}`'s `InferenceEngine` wraps an ONNX Runtime C++
+session for the model M7 exports — construct it with a model path, batch size, and window
+size (matching the exported graph's own fixed shape), call `infer()` with a flat row-major
+`[batch, window, 40]` buffer, get back `[batch, 3]` logits. `cpp/cmake/OnnxRuntime.cmake`
+fetches Microsoft's prebuilt ONNX Runtime release (version pinned to 1.27.0 — deliberately
+matching this project's Python-side `onnxruntime` dependency exactly, so the model export and
+this C++ engine are verified against the identical release, not two versions that could
+behave subtly differently) since there's no source build practical for CI or local iteration.
+
+`cpp/bench/latency_histogram.hpp` is the sibling **liquibook-x** project's own
+`bench/latency_histogram.hpp`, mirrored directly (same interface, same reasoning: Google
+Benchmark's own model reports mean/median across timed-region *repetitions*, not a percentile
+distribution of *individual operation* latencies, which is what P50/P99/P99.9 actually mean).
+`cpp/bench/bench_inference_latency.cpp` measures batch-size-1 latency — the deployment shape
+this project actually targets, matching M7's own fixed-batch-size export decision — plus
+throughput across larger batch sizes, following the exact `bench_order_book_latency.cpp`
+structure (warmup outside the timed region, one sample per operation).
+
+Measured on this development machine (Apple Silicon, Release build, no sanitizers — their
+overhead would make these numbers meaningless, the same reasoning liquibook-x's own
+`bench/CMakeLists.txt` states):
+
+```
+InferenceEngine::infer (b=1)  n=500  mean=1338.3µs  p50=1292.2µs  p90=1475.4µs  p99=1969.1µs  p99.9=2321.8µs  max=4593.0µs
+
+batch_size=1   throughput=  749.0 rows/sec
+batch_size=8   throughput=  750.6 rows/sec
+batch_size=32  throughput=  758.6 rows/sec
+batch_size=64  throughput=  714.1 rows/sec
+```
+
+**Batching provides essentially no throughput benefit here — reported plainly, not the
+result a reader might expect from a "batch-size-1 vs. larger-batch throughput" benchmark
+section.** Throughput stays flat (~715-760 rows/sec) across every batch size tested. The
+likely explanation: `InferenceEngine` deliberately runs single-threaded
+(`SetIntraOpNumThreads(1)`, matching this project's Python-side seeding/determinism ethos —
+multi-threaded ONNX Runtime execution can introduce non-determinism across runs), and this
+CNN-LSTM's LSTM layer is inherently sequential — it processes `window_size=100` timesteps one
+at a time regardless of how many rows are batched alongside each other, so total wall-clock
+time scales with total timesteps processed, not with the number of `infer()` calls. That
+reads as a genuine architectural property of this network, not a bug in the benchmark or the
+inference engine, but it's stated as the most likely explanation, not independently confirmed
+by, say, profiling the ONNX graph's own per-op time breakdown — a natural follow-up if
+batched throughput mattered for a real deployment decision.
+
+Three real findings from actually building and running this, not from writing CMake and
+assuming it would work:
+- `Ort::Session::Run()` isn't `const` (an implementation detail of ONNX Runtime's own C API
+  binding), while `infer()` is logically read-only from this project's own contract (the same
+  input always produces the same output). Resolved with a `mutable` session member — keeps
+  `infer()`'s `const` signature for callers rather than leaking that implementation detail
+  into this class's public interface.
+- Neither macOS's dylib IDs nor Linux's shared-object SONAME point anywhere a built
+  executable finds automatically by default — every target needed an explicit `RPATH`
+  pointing at the FetchContent-downloaded ONNX Runtime location. Verified on macOS first
+  (the development machine), then generalized to both platforms rather than assumed to work
+  identically on Linux (CI's actual runner) without checking.
+- Building `cpp/bench/`'s benchmark executable together with ASan/UBSan enabled fails to
+  link (`deeplob_inference`, a static library, gets sanitizer instrumentation baked in
+  whenever `ENABLE_ASAN`/`ENABLE_UBSAN` are on, but the benchmark executable deliberately
+  doesn't request sanitizers — mixing the two doesn't link). This is not a bug to fix: it's
+  liquibook-x's own established pattern, confirmed here rather than assumed — benchmarks are
+  only ever built on the sanitizer-off Release CI legs, never combined with ASan/UBSan in the
+  same build, exactly like `ci.yml`'s `benchmarks: ON` only appearing on `sanitizers: OFF`
+  legs.
 
 ## License
 

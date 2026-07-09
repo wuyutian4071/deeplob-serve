@@ -44,6 +44,13 @@ def export_to_onnx(
         input_names=["lob_window"],
         output_names=["logits"],
         opset_version=18,
+        # The dynamo exporter defaults external_data=True, splitting weights into a
+        # companion "<name>.onnx.data" file -- a real, if unsurprising, discovery from
+        # actually running the export and checking what files it produced. That's meant for
+        # models too large for a single protobuf message; every model this project exports
+        # is a few hundred KB, so a single self-contained .onnx file is simpler to move
+        # around (e.g. as a C++ test fixture) with nothing to keep in sync.
+        external_data=False,
     )
 
 

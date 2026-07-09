@@ -21,6 +21,19 @@ def test_export_produces_a_valid_onnx_file(tmp_path: Path) -> None:
     onnx.checker.check_model(loaded)
 
 
+def test_export_is_a_single_self_contained_file_not_split_external_data(tmp_path: Path) -> None:
+    # The dynamo exporter defaults to external_data=True, splitting weights into a companion
+    # "<name>.onnx.data" file -- fine for models too large for a single protobuf message, but
+    # unnecessary complexity for this project's small models (a few hundred KB), and an extra
+    # file to keep in sync wherever a .onnx file gets moved (e.g. as a C++ test fixture).
+    model = DeepLOBCNNLSTM(window_size=_WINDOW_SIZE)
+    onnx_path = tmp_path / "model.onnx"
+
+    export_to_onnx(model, window_size=_WINDOW_SIZE, onnx_path=onnx_path)
+
+    assert list(tmp_path.iterdir()) == [onnx_path]
+
+
 def test_export_declares_the_expected_fixed_input_shape(tmp_path: Path) -> None:
     model = DeepLOBCNNLSTM(window_size=_WINDOW_SIZE)
     onnx_path = tmp_path / "model.onnx"

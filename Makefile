@@ -1,5 +1,5 @@
 .PHONY: help install lint format-check format typecheck test cov check \
-        cpp-configure cpp-build cpp-test cpp-check clean
+        cpp-configure cpp-build cpp-test cpp-check cpp-bench clean
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -43,6 +43,11 @@ cpp-test: cpp-build  ## Run the C++ test suite
 	ctest --test-dir cpp/build --output-on-failure
 
 cpp-check: cpp-test  ## Run the full C++ CI gate locally (must match ci.yml)
+
+cpp-bench:  ## Build and run the C++ inference latency/throughput benchmarks (Release, no sanitizers -- their overhead would make the numbers meaningless)
+	cmake -S cpp -B cpp/build-release -DCMAKE_BUILD_TYPE=Release -DDEEPLOB_BUILD_BENCHMARKS=ON
+	cmake --build cpp/build-release -j
+	./cpp/build-release/bench/deeplob_bench_inference_latency
 
 # --- Housekeeping -------------------------------------------------------------
 

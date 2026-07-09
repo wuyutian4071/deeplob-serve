@@ -17,6 +17,7 @@ endif()
 
 include(cmake/Warnings.cmake)
 include(cmake/Sanitizers.cmake)
+include(cmake/OnnxRuntime.cmake)
 
 option(DEEPLOB_BUILD_TESTS "Build GoogleTest-based unit tests" ON)
 option(DEEPLOB_BUILD_BENCHMARKS "Build Google Benchmark microbenchmarks" OFF)
@@ -46,4 +47,7 @@ if(DEEPLOB_BUILD_BENCHMARKS)
 endif()
 
 add_subdirectory(smoke)
-# inference/ (M8) and bench/ (M8) join here once the ONNX Runtime C++ service exists.
+add_subdirectory(inference)
+if(DEEPLOB_BUILD_BENCHMARKS)
+    add_subdirectory(bench)
+endif()
