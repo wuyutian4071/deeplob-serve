@@ -8,7 +8,11 @@ reflects. If you're running on an older PyTorch/Lightning version where this doe
 `resolve_precision()`'s fallback to `"32-true"` for CPU is the safe default to reach for.
 """
 
+from typing import Literal
+
 import torch
+
+Precision = Literal["16-mixed", "32-true"]
 
 
 def resolve_accelerator() -> str:
@@ -23,7 +27,7 @@ def resolve_accelerator() -> str:
     return "cpu"
 
 
-def resolve_precision(accelerator: str) -> str:
+def resolve_precision(accelerator: str) -> Precision:
     """A Lightning `Trainer(precision=...)` value. Mixed precision (`"16-mixed"`) is used on
     both MPS and CUDA -- verified working on MPS specifically (see module docstring), not
     just assumed to work the same as CUDA's much more mature AMP support. Plain `"32-true"`

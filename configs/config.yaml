@@ -1,0 +1,39 @@
+# Hydra config-driven training. Run via: uv run python -m deeplob.training.train
+#
+# hydra.job.chdir=false keeps the working directory unchanged (Hydra's older default
+# auto-chdir's into a per-run outputs/<date>/<time>/ directory, which would scatter a
+# relative mlflow.tracking_uri across many directories instead of accumulating in one
+# `mlruns/` at the repo root -- the well-known gotcha this setting exists to avoid).
+hydra:
+  job:
+    chdir: false
+
+seed: 42
+
+data:
+  num_synthetic_snapshots: 20000
+  window_size: 100
+  horizon: 10
+  alpha: 0.0005
+  train_frac: 0.7
+  val_frac: 0.15
+
+model:
+  _target_: deeplob.models.cnn_lstm.DeepLOBCNNLSTM
+  window_size: ${data.window_size}
+  lstm_hidden_size: 64
+  conv_channels: 32
+
+training:
+  learning_rate: 0.001
+  batch_size: 64
+  max_epochs: 5
+
+# A database backend (not the plain filesystem "./mlruns" store): current MLflow (3.x) has
+# put the filesystem tracking backend into maintenance mode and raises rather than silently
+# using it -- confirmed by actually running this script, not assumed from documentation.
+# SQLite is the simplest database backend for a local, single-user research project like this
+# one; a real deployment would use a proper server, which this project doesn't need.
+mlflow:
+  tracking_uri: sqlite:///mlflow.db
+  experiment_name: deeplob-cnn-lstm

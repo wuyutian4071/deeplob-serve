@@ -30,6 +30,8 @@ htmlcov/
 /data/
 /checkpoints/
 /mlruns/
+/mlflow.db
+/outputs/
 /models/*.onnx
 /models/*.pt
 

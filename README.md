@@ -25,17 +25,18 @@
 
 ## Status
 
-Built milestone by milestone. Current: **M3 — baselines and the evaluation harness**: a
-chronological (never shuffled) train/val/test split, F1-per-class and confusion-matrix
-reporting shared by every model in this project, and two baselines (logistic regression,
-gradient boosting) any later model is expected to beat.
+Built milestone by milestone. Current: **M4 — DeepLOB-style CNN-LSTM + training infra**: a
+PyTorch Lightning training loop shared by every neural model in this project, Hydra
+config-driven runs, local MLflow tracking, reproducible seeding, and mixed precision on
+whatever this machine's backend actually supports (Apple Silicon MPS, verified working —
+not assumed to behave like CUDA's more mature AMP support just because it's "GPU-like").
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
 | M1 | Repo skeleton, dual CI (Python + C++) | ✅ |
 | M2 | Data pipeline: FI-2010 loader + synthetic LOB generator, windowed sequences, labels | ✅ |
 | M3 | Baselines (logistic regression, gradient boosting) + temporal-split evaluation harness | ✅ |
-| M4 | DeepLOB-style CNN-LSTM + training infra (Lightning, Hydra, MLflow) | ⬜ |
+| M4 | DeepLOB-style CNN-LSTM + training infra (Lightning, Hydra, MLflow) | ✅ |
 | M5 | Transformer baseline + ablation sweeps | ⬜ |
 | M6 | Comparative evaluation across all models + calibration + published-results comparison | ⬜ |
 | M7 | ONNX export + quantization + differential parity check | ⬜ |
@@ -111,6 +112,44 @@ iteration budget on raw LOB features that mix prices (~100) and volumes (~1-500)
 different scales, a real finding confirmed via `sklearn`'s own `ConvergenceWarning`, not
 assumed. The `Pipeline` fits the scaler on training data only and just transforms with it at
 prediction time — the standard leakage-free way to do this.
+
+## Training infra and the CNN-LSTM (M4)
+
+`training/` is the infrastructure every neural model in this project (this CNN-LSTM, M5's
+Transformer) shares: `seeding.py` seeds Python/numpy/torch reproducibly; `device.py` picks
+the accelerator and precision by actually checking `torch`'s backend at runtime, not by
+assuming "this is a Mac so it's MPS"; `dataset.py` wraps windowed `(X, y)` arrays for
+PyTorch DataLoaders; `lightning_module.py`'s `LOBClassifier` is a generic training loop any
+classifier `nn.Module` plugs into.
+
+Mixed precision on MPS was verified empirically, not assumed: a real
+`lightning.Trainer.fit()` run with `accelerator="mps", precision="16-mixed"` completes
+cleanly on this project's PyTorch 2.13 / Lightning 2.6 install, confirmed by actually running
+it (twice — once in isolation, once inside the full `train.py` pipeline) rather than taken on
+faith from CUDA's much more mature AMP reputation.
+
+`models/cnn_lstm.py`'s `DeepLOBCNNLSTM` follows the DeepLOB paper's (Zhang, Zohren, Roberts,
+2018) key structural ideas — a 2D conv stack that pairs each price level's (price, volume)
+columns and progressively merges levels, an Inception-style multi-scale temporal block, then
+an LSTM over the compressed sequence — but is explicitly **"DeepLOB-style", not a byte-exact
+reproduction**: the specific channel counts and kernel sizes here weren't independently
+re-verified against the paper's own tables during development, and saying so plainly is more
+honest than implying a precision this implementation doesn't have.
+
+`training/train.py` is the Hydra config-driven entry point
+(`uv run python -m deeplob.training.train`, config at `configs/config.yaml`) tying together
+every M2-M4 piece — synthetic data through labeling, windowing, the temporal split, training,
+and the shared evaluation harness — with local MLflow tracking (`sqlite:///mlflow.db`, a
+database backend: current MLflow has put the plain filesystem `./mlruns` store into
+maintenance mode and raises rather than silently using it, discovered only by running this
+script and reading the actual error). Running it end to end on synthetic data surfaces an
+expected, honest result: training accuracy climbs well above validation/test accuracy, which
+lands right around chance (~33%, three classes) — exactly what should happen, since the
+synthetic generator is a pure random walk with no real predictive signal by construction.
+That gap confirms the training mechanics work (the model can fit data, gradients flow, loss
+decreases) without the model spuriously "cheating" on data that has nothing genuine to learn;
+real FI-2010 data (a separate, documented manual step) is what would actually test whether
+this architecture predicts anything.
 
 ## License
 
