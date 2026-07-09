@@ -1,0 +1,7 @@
+_target_: deeplob.models.transformer.LOBTransformer
+window_size: ${data.window_size}
+d_model: 64
+nhead: 4
+num_layers: 2
+dim_feedforward: 128
+dropout: 0.1

@@ -8,6 +8,14 @@ hydra:
   job:
     chdir: false
 
+# A proper Hydra config group (configs/model/*.yaml), not a flat inline block -- lets the
+# model be swapped via `model=cnn_lstm` / `model=transformer` on the command line (needed
+# starting M5, which adds the Transformer as a second choice) or swept across via
+# `--multirun model=cnn_lstm,transformer`, without touching this file.
+defaults:
+  - model: cnn_lstm
+  - _self_
+
 seed: 42
 
 data:
@@ -17,12 +25,6 @@ data:
   alpha: 0.0005
   train_frac: 0.7
   val_frac: 0.15
-
-model:
-  _target_: deeplob.models.cnn_lstm.DeepLOBCNNLSTM
-  window_size: ${data.window_size}
-  lstm_hidden_size: 64
-  conv_channels: 32
 
 training:
   learning_rate: 0.001
@@ -36,4 +38,7 @@ training:
 # one; a real deployment would use a proper server, which this project doesn't need.
 mlflow:
   tracking_uri: sqlite:///mlflow.db
-  experiment_name: deeplob-cnn-lstm
+  # Grouped by the actual model choice (via Hydra's runtime.choices resolver), not a fixed
+  # name -- now that `model` is swappable (M5), a fixed "deeplob-cnn-lstm" name would quietly
+  # mix Transformer runs into the CNN-LSTM's own experiment.
+  experiment_name: deeplob-${hydra:runtime.choices.model}

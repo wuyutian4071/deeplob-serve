@@ -25,11 +25,10 @@
 
 ## Status
 
-Built milestone by milestone. Current: **M4 — DeepLOB-style CNN-LSTM + training infra**: a
-PyTorch Lightning training loop shared by every neural model in this project, Hydra
-config-driven runs, local MLflow tracking, reproducible seeding, and mixed precision on
-whatever this machine's backend actually supports (Apple Silicon MPS, verified working —
-not assumed to behave like CUDA's more mature AMP support just because it's "GPU-like").
+Built milestone by milestone. Current: **M5 — Transformer baseline + ablation sweeps**: a
+lightweight Transformer encoder plugged into the same generic training loop the CNN-LSTM
+uses, a proper Hydra config group so the model is swappable from the command line, and a
+6-way ablation sweep (model × label horizon) run end to end via Hydra's `--multirun`.
 
 | Milestone | Scope | State |
 |-----------|-------|-------|
@@ -37,7 +36,7 @@ not assumed to behave like CUDA's more mature AMP support just because it's "GPU
 | M2 | Data pipeline: FI-2010 loader + synthetic LOB generator, windowed sequences, labels | ✅ |
 | M3 | Baselines (logistic regression, gradient boosting) + temporal-split evaluation harness | ✅ |
 | M4 | DeepLOB-style CNN-LSTM + training infra (Lightning, Hydra, MLflow) | ✅ |
-| M5 | Transformer baseline + ablation sweeps | ⬜ |
+| M5 | Transformer baseline + ablation sweeps | ✅ |
 | M6 | Comparative evaluation across all models + calibration + published-results comparison | ⬜ |
 | M7 | ONNX export + quantization + differential parity check | ⬜ |
 | M8 | C++ inference engine + latency/throughput benchmarks | ⬜ |
@@ -150,6 +149,48 @@ That gap confirms the training mechanics work (the model can fit data, gradients
 decreases) without the model spuriously "cheating" on data that has nothing genuine to learn;
 real FI-2010 data (a separate, documented manual step) is what would actually test whether
 this architecture predicts anything.
+
+## Transformer + ablation sweep (M5)
+
+`models/transformer.py`'s `LOBTransformer` is M5's alternative to the CNN-LSTM: a linear
+projection of the 40 raw per-timestep features into a `d_model` embedding, fixed sinusoidal
+positional encoding (Vaswani et al., 2017), a stack of standard `TransformerEncoder` layers,
+then mean-pooling over time into the classifier head. It plugs into the exact same
+`LOBClassifier` training loop the CNN-LSTM uses — no changes to `training/` were needed,
+which is the point of M4's model-agnostic design.
+
+`configs/model/` is now a proper Hydra config group (`cnn_lstm.yaml` / `transformer.yaml`),
+replacing M4's flat inline `model:` block — the model is swappable from the command line
+(`model=cnn_lstm` or `model=transformer`) or swept across, without touching `config.yaml`.
+`mlflow.experiment_name` now resolves from the actual model choice
+(`deeplob-${hydra:runtime.choices.model}`) rather than a fixed name, so Transformer and
+CNN-LSTM runs land in separate MLflow experiments instead of silently mixing together.
+
+An ablation sweep — model choice × label horizon (5/10/20 snapshots) — was run end to end via
+`uv run python -m deeplob.training.train --multirun model=cnn_lstm,transformer
+data.horizon=5,10,20`, 6 combinations on synthetic data:
+
+| Model | Horizon | Accuracy | Macro F1 | Note |
+|-------|---------|----------|----------|------|
+| CNN-LSTM | 5 | 0.351 | 0.324 | |
+| CNN-LSTM | 10 | 0.350 | 0.347 | |
+| CNN-LSTM | 20 | 0.336 | 0.300 | |
+| Transformer | 5 | 0.341 | 0.276 | |
+| Transformer | 10 | 0.329 | 0.196 | STATIONARY F1 = 0.0 — collapsed to never predicting it |
+| Transformer | 20 | 0.367 | 0.265 | STATIONARY F1 = 0.0 — same collapse |
+
+Every combination lands in the 33-37% range — chance, for three classes — which is the
+expected, correct result on this project's pure-random-walk synthetic data (see M4's own
+finding above; this isn't a new bug, it's the same honest baseline holding across a second
+model and three horizons). One genuine finding *did* surface from the sweep, though: at
+horizons 10 and 20, the Transformer collapsed to predicting only DOWN/UP and never
+STATIONARY at all, while the CNN-LSTM showed no such collapse at any horizon tested. Reported
+plainly rather than smoothed over — with only 3 epochs per sweep combination (kept short
+deliberately, to make a 6-way sweep run quickly on synthetic data), this reads as an
+under-trained Transformer settling into a degenerate 2-class solution rather than a deeper
+architectural problem, but that's an inference, not something independently confirmed here;
+a longer per-combination training budget would be the natural next check if this mattered for
+a real deployment decision.
 
 ## License
 

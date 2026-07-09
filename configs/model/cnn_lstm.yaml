@@ -1,0 +1,4 @@
+_target_: deeplob.models.cnn_lstm.DeepLOBCNNLSTM
+window_size: ${data.window_size}
+lstm_hidden_size: 64
+conv_channels: 32
